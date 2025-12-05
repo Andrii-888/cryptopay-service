@@ -1,7 +1,6 @@
-// src/invoices/invoices.service.ts
-
 import { Injectable } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
+import { AmlService } from '../aml/aml.service';
 
 export type InvoiceStatus = 'waiting' | 'confirmed' | 'expired' | 'rejected';
 
@@ -17,39 +16,53 @@ export interface Invoice {
   paymentUrl: string;
 }
 
+// ✅ Base URL for frontend (from env on Render)
+const FRONTEND_BASE_URL =
+  process.env.FRONTEND_BASE_URL ?? 'https://demo.your-cryptopay.com';
+
 // Простое in-memory хранилище
 const invoiceStore = new Map<string, Invoice>();
 
 @Injectable()
 export class InvoicesService {
+  constructor(private readonly amlService: AmlService) {}
+
   // Создать новый инвойс
   async create(dto: CreateInvoiceDto): Promise<Invoice> {
     const id = `inv_${Date.now()}`;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // +15 минут
 
+    const fiatCurrency = dto.fiatCurrency ?? 'EUR';
+    const cryptoCurrency = dto.cryptoCurrency ?? 'USDT';
+
+    // 🔍 Черновая AML-проверка (пока просто логика в AmlService)
+    await this.amlService.checkInvoice({
+      fiatAmount: dto.fiatAmount,
+      fiatCurrency,
+      cryptoCurrency,
+    });
+
     const invoice: Invoice = {
       id,
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
       fiatAmount: dto.fiatAmount,
-      fiatCurrency: dto.fiatCurrency ?? 'EUR',
-      cryptoAmount: dto.fiatAmount, // демо: 1:1
-      cryptoCurrency: dto.cryptoCurrency ?? 'USDT',
+      fiatCurrency,
+      cryptoAmount: dto.fiatAmount, // demo: 1:1
+      cryptoCurrency,
       status: 'waiting',
-      paymentUrl: `https://demo.your-cryptopay.com/open/pay/${id}`,
+      paymentUrl: `${FRONTEND_BASE_URL}/open/pay/${id}`,
     };
 
     invoiceStore.set(id, invoice);
     return invoice;
   }
 
-  // Найти инвойс по id
   async findOne(id: string): Promise<Invoice | null> {
     return invoiceStore.get(id) ?? null;
   }
 
-  // Обновить статус инвойса
   async updateStatus(
     id: string,
     status: InvoiceStatus,
