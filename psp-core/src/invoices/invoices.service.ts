@@ -3,11 +3,8 @@
 import { Injectable } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 
-// Возможные статусы инвойса
 export type InvoiceStatus = 'waiting' | 'confirmed' | 'expired' | 'rejected';
 
-// Описание структуры инвойса,
-// как мы его будем хранить в памяти (позже — в базе).
 export interface Invoice {
   id: string;
   createdAt: string;
@@ -20,58 +17,48 @@ export interface Invoice {
   paymentUrl: string;
 }
 
+// Простое in-memory хранилище
+const invoiceStore = new Map<string, Invoice>();
+
 @Injectable()
 export class InvoicesService {
-  // Пока что храним инвойсы в оперативной памяти — обычный массив.
-  // Позже заменим на базу данных (PostgreSQL + Prisma).
-  private invoices: Invoice[] = [];
-
-  // Создание нового инвойса.
-  // На вход получаем данные из CreateInvoiceDto,
-  // на выход — готовый объект Invoice.
-  create(createInvoiceDto: CreateInvoiceDto): Invoice {
-    // Простая генерация id: inv_ + timestamp.
+  // Создать новый инвойс
+  async create(dto: CreateInvoiceDto): Promise<Invoice> {
     const id = `inv_${Date.now()}`;
-
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // +15 минут
 
-    // Временно считаем, что 1 USDT = 1 EUR/CHF/USD (курс 1:1),
-    // потом подключим реальный rate.
     const invoice: Invoice = {
       id,
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
-      fiatAmount: createInvoiceDto.fiatAmount,
-      fiatCurrency: createInvoiceDto.fiatCurrency,
-      cryptoAmount: createInvoiceDto.fiatAmount, // временно так же, как фиат
-      cryptoCurrency: createInvoiceDto.cryptoCurrency,
+      fiatAmount: dto.fiatAmount,
+      fiatCurrency: dto.fiatCurrency ?? 'EUR',
+      cryptoAmount: dto.fiatAmount, // демо: 1:1
+      cryptoCurrency: dto.cryptoCurrency ?? 'USDT',
       status: 'waiting',
-      // Позже сюда подставим реальный домен демо-магазина
       paymentUrl: `https://demo.your-cryptopay.com/open/pay/${id}`,
     };
 
-    // Сохраняем инвойс в массив
-    this.invoices.push(invoice);
-
+    invoiceStore.set(id, invoice);
     return invoice;
   }
 
-  // Поиск инвойса по id
-  findOne(id: string): Invoice | undefined {
-    return this.invoices.find((invoice) => invoice.id === id);
+  // Найти инвойс по id
+  async findOne(id: string): Promise<Invoice | null> {
+    return invoiceStore.get(id) ?? null;
   }
 
-  // Обновление статуса инвойса.
-  // Пока не используем снаружи, но скоро повесим на отдельные endpoint'ы.
-  updateStatus(id: string, status: InvoiceStatus): Invoice | undefined {
-    const invoice = this.invoices.find((item) => item.id === id);
+  // Обновить статус инвойса
+  async updateStatus(
+    id: string,
+    status: InvoiceStatus,
+  ): Promise<Invoice | null> {
+    const existing = invoiceStore.get(id);
+    if (!existing) return null;
 
-    if (!invoice) {
-      return undefined;
-    }
-
-    invoice.status = status;
-    return invoice;
+    const updated: Invoice = { ...existing, status };
+    invoiceStore.set(id, updated);
+    return updated;
   }
 }
