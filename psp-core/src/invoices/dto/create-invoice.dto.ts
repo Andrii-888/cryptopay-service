@@ -1,15 +1,21 @@
 // src/invoices/dto/create-invoice.dto.ts
 
-// DTO = Data Transfer Object.
-// Это форма данных, которые бэкенд принимает в POST /invoices.
-
 export class CreateInvoiceDto {
-  // Сумма в фиате (например, 249)
-  fiatAmount: number;
+  /**
+   * Сумма в фиате (то, что видит магазин и платит клиент).
+   * Пример: 1399.00
+   */
+  fiatAmount!: number;
 
-  // Валюта фиата (например, 'EUR', 'CHF', 'USD')
-  fiatCurrency: string;
+  /**
+   * Валюта фиата.
+   * Пример: "EUR", "CHF"
+   */
+  fiatCurrency!: string;
 
-  // Криптовалюта, в которой клиент будет платить ('USDT', 'USDC' и т.п.)
-  cryptoCurrency: string;
+  /**
+   * Криптовалюта, в которой клиент будет платить.
+   * Пример: "USDT", "USDC"
+   */
+  cryptoCurrency!: string;
 }

@@ -1,6 +1,7 @@
+// src/invoices/invoices.service.ts
+
 import { Injectable } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
-import { AmlService } from '../aml/aml.service';
 
 export type InvoiceStatus = 'waiting' | 'confirmed' | 'expired' | 'rejected';
 
@@ -16,62 +17,78 @@ export interface Invoice {
   paymentUrl: string;
 }
 
-// ✅ Base URL for frontend (from env on Render)
-const FRONTEND_BASE_URL =
-  process.env.FRONTEND_BASE_URL ?? 'https://demo.your-cryptopay.com';
-
-// Простое in-memory хранилище
-const invoiceStore = new Map<string, Invoice>();
-
+/**
+ * ВРЕМЕННЫЙ in-memory сервис.
+ * Хранит инвойсы в памяти процесса (Map) — достаточно для демо и разработки.
+ * Потом можно будет вынести в БД.
+ */
 @Injectable()
 export class InvoicesService {
-  constructor(private readonly amlService: AmlService) {}
+  private readonly invoices = new Map<string, Invoice>();
 
-  // Создать новый инвойс
+  /**
+   * Создать новый инвойс.
+   * Фронт crypto-pay отправляет поля:
+   * - fiatAmount
+   * - fiatCurrency
+   * - cryptoCurrency
+   */
   async create(dto: CreateInvoiceDto): Promise<Invoice> {
-    const id = `inv_${Date.now()}`;
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // +15 минут
+    const { fiatAmount, fiatCurrency, cryptoCurrency } = dto;
 
-    const fiatCurrency = dto.fiatCurrency ?? 'EUR';
-    const cryptoCurrency = dto.cryptoCurrency ?? 'USDT';
+    if (!fiatAmount || fiatAmount <= 0) {
+      throw new Error('Invalid fiatAmount');
+    }
 
-    // 🔍 Черновая AML-проверка (пока просто логика в AmlService)
-    await this.amlService.checkInvoice({
-      fiatAmount: dto.fiatAmount,
-      fiatCurrency,
-      cryptoCurrency,
-    });
+    const id = `inv_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + 25 * 60 * 1000); // 25 минут
+
+    // Базовый URL фронта — берём из ENV, с дефолтом на демо-домен Vercel
+    const frontendBaseUrl =
+      process.env.FRONTEND_BASE_URL ?? 'https://crypto-pay-iota.vercel.app';
+
+    const paymentUrl = `${frontendBaseUrl}/open/pay/${id}`;
 
     const invoice: Invoice = {
       id,
-      createdAt: now.toISOString(),
+      createdAt: createdAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
-      fiatAmount: dto.fiatAmount,
+      fiatAmount,
       fiatCurrency,
-      cryptoAmount: dto.fiatAmount, // demo: 1:1
+      cryptoAmount: fiatAmount, // пока 1:1, конвертацию добавим позже
       cryptoCurrency,
       status: 'waiting',
-      paymentUrl: `${FRONTEND_BASE_URL}/open/pay/${id}`,
+      paymentUrl,
     };
 
-    invoiceStore.set(id, invoice);
+    this.invoices.set(id, invoice);
+
     return invoice;
   }
 
+  /**
+   * Найти инвойс по id.
+   * Используется фронтом на странице /open/pay/[invoiceId].
+   */
   async findOne(id: string): Promise<Invoice | null> {
-    return invoiceStore.get(id) ?? null;
+    return this.invoices.get(id) ?? null;
   }
 
+  /**
+   * Обновить статус инвойса.
+   * Используется контроллером для confirm / expire / reject.
+   */
   async updateStatus(
     id: string,
     status: InvoiceStatus,
   ): Promise<Invoice | null> {
-    const existing = invoiceStore.get(id);
+    const existing = this.invoices.get(id);
     if (!existing) return null;
 
     const updated: Invoice = { ...existing, status };
-    invoiceStore.set(id, updated);
+    this.invoices.set(id, updated);
+
     return updated;
   }
 }
