@@ -10,22 +10,20 @@ import {
 } from '@nestjs/common';
 import { InvoicesService, type Invoice } from './invoices.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
+import { AttachTransactionDto } from './dto/attach-transaction.dto';
+import { UpdateAmlDto } from './dto/update-aml.dto';
+import { WebhookEvent } from '../webhooks/interfaces/webhook-event.interface';
 
 @Controller('invoices')
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
-  // POST /invoices
-  // Создать новый инвойс
   @Post()
   async create(@Body() createInvoiceDto: CreateInvoiceDto): Promise<Invoice> {
-    // сервис теперь async → ждём результат
     const invoice = await this.invoicesService.create(createInvoiceDto);
     return invoice;
   }
 
-  // GET /invoices/:id
-  // Получить инвойс по id
   @Get(':id')
   async findOne(@Param('id') id: string): Promise<Invoice> {
     const invoice = await this.invoicesService.findOne(id);
@@ -37,8 +35,32 @@ export class InvoicesController {
     return invoice;
   }
 
-  // POST /invoices/:id/confirm
-  // Подтвердить оплату инвойса
+  // ✅ Получить все webhook-события по инвойсу
+  @Get(':id/webhooks')
+  async getInvoiceWebhooks(@Param('id') id: string): Promise<WebhookEvent[]> {
+    const invoice = await this.invoicesService.findOne(id);
+
+    if (!invoice) {
+      throw new NotFoundException(`Invoice with id ${id} not found`);
+    }
+
+    return this.invoicesService.getWebhookEventsForInvoice(id);
+  }
+
+  // ✅ "Отправить" все pending webhooks по инвойсу (MVP: просто пометить sent)
+  @Post(':id/webhooks/dispatch')
+  async dispatchInvoiceWebhooks(
+    @Param('id') id: string,
+  ): Promise<{ invoiceId: string; processed: number }> {
+    const invoice = await this.invoicesService.findOne(id);
+
+    if (!invoice) {
+      throw new NotFoundException(`Invoice with id ${id} not found`);
+    }
+
+    return this.invoicesService.dispatchPendingWebhooksForInvoice(id);
+  }
+
   @Post(':id/confirm')
   async confirm(@Param('id') id: string): Promise<Invoice> {
     const updated = await this.invoicesService.updateStatus(id, 'confirmed');
@@ -47,11 +69,15 @@ export class InvoicesController {
       throw new NotFoundException(`Invoice with id ${id} not found`);
     }
 
+    await this.invoicesService.createWebhookEvent(
+      updated.id,
+      'invoice.confirmed',
+      updated,
+    );
+
     return updated;
   }
 
-  // POST /invoices/:id/expire
-  // Пометить инвойс как истёкший (оплата не поступила вовремя)
   @Post(':id/expire')
   async expire(@Param('id') id: string): Promise<Invoice> {
     const updated = await this.invoicesService.updateStatus(id, 'expired');
@@ -60,11 +86,15 @@ export class InvoicesController {
       throw new NotFoundException(`Invoice with id ${id} not found`);
     }
 
+    await this.invoicesService.createWebhookEvent(
+      updated.id,
+      'invoice.expired',
+      updated,
+    );
+
     return updated;
   }
 
-  // POST /invoices/:id/reject
-  // Отклонить инвойс (manual reject / AML / risk)
   @Post(':id/reject')
   async reject(@Param('id') id: string): Promise<Invoice> {
     const updated = await this.invoicesService.updateStatus(id, 'rejected');
@@ -72,6 +102,63 @@ export class InvoicesController {
     if (!updated) {
       throw new NotFoundException(`Invoice with id ${id} not found`);
     }
+
+    await this.invoicesService.createWebhookEvent(
+      updated.id,
+      'invoice.rejected',
+      updated,
+    );
+
+    return updated;
+  }
+
+  @Post(':id/tx')
+  async attachTx(
+    @Param('id') id: string,
+    @Body() body: AttachTransactionDto,
+  ): Promise<Invoice> {
+    const updated = await this.invoicesService.attachTransaction(id, body);
+
+    if (!updated) {
+      throw new NotFoundException(`Invoice with id ${id} not found`);
+    }
+
+    return updated;
+  }
+
+  @Post(':id/aml')
+  async updateAml(
+    @Param('id') id: string,
+    @Body() body: UpdateAmlDto,
+  ): Promise<Invoice> {
+    const updated = await this.invoicesService.updateAml(id, body);
+
+    if (!updated) {
+      throw new NotFoundException(`Invoice with id ${id} not found`);
+    }
+
+    await this.invoicesService.createWebhookEvent(
+      updated.id,
+      'invoice.aml.updated',
+      updated,
+    );
+
+    return updated;
+  }
+
+  @Post(':id/aml/check')
+  async autoAml(@Param('id') id: string): Promise<Invoice> {
+    const updated = await this.invoicesService.autoCheckAml(id);
+
+    if (!updated) {
+      throw new NotFoundException(`Invoice with id ${id} not found`);
+    }
+
+    await this.invoicesService.createWebhookEvent(
+      updated.id,
+      'invoice.aml.updated',
+      updated,
+    );
 
     return updated;
   }
