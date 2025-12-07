@@ -35,10 +35,10 @@ const DEFAULT_EXPIRY_MINUTES = 15;
 const FRONTEND_BASE_URL =
   process.env.FRONTEND_BASE_URL ?? 'https://demo.your-cryptopay.com';
 
-// 🔹 куда шлём вебхуки (общий URL для демо / мерчанта)
+// 🔹 Куда шлём вебхуки (общий URL для демо / мерчанта)
 const WEBHOOK_TARGET_URL = process.env.WEBHOOK_TARGET_URL ?? '';
 
-// 🔹 секрет для HMAC-подписи вебхуков
+// 🔹 Секрет для HMAC-подписи вебхуков
 const WEBHOOK_SECRET =
   process.env.WEBHOOK_SECRET ??
   'psp_whsec_dev_demo_fallback_not_for_production';
@@ -60,7 +60,6 @@ export class InvoicesService {
     const cryptoCurrency = dto.cryptoCurrency || 'USDT';
 
     const cryptoAmount = fiatAmount;
-
     const paymentUrl = `${FRONTEND_BASE_URL}/open/pay/${id}`;
 
     const createdAt = now.toISOString();
@@ -176,6 +175,85 @@ export class InvoicesService {
     }
 
     return this.findOne(id);
+  }
+
+  /**
+   * Список инвойсов с фильтром по статусу/датам и пагинацией.
+   */
+  async findAll(options?: {
+    status?: InvoiceStatus;
+    from?: string; // created_at >= from (ISO)
+    to?: string; // created_at <= to (ISO)
+    limit?: number;
+    offset?: number;
+  }): Promise<Invoice[]> {
+    const db = this.sqlite.connection;
+
+    let { status, from, to, limit = 100, offset = 0 } = options ?? {};
+
+    // Санитизируем числа, чтобы не уронить базу
+    if (!Number.isFinite(limit) || limit <= 0) {
+      limit = 100;
+    }
+    if (limit > 500) {
+      limit = 500;
+    }
+
+    if (!Number.isFinite(offset) || offset < 0) {
+      offset = 0;
+    }
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (status) {
+      conditions.push('status = ?');
+      params.push(status);
+    }
+
+    if (from) {
+      conditions.push('created_at >= ?');
+      params.push(from);
+    }
+
+    if (to) {
+      conditions.push('created_at <= ?');
+      params.push(to);
+    }
+
+    let sql = `
+      SELECT
+        id,
+        created_at as createdAt,
+        expires_at as expiresAt,
+        fiat_amount as fiatAmount,
+        fiat_currency as fiatCurrency,
+        crypto_amount as cryptoAmount,
+        crypto_currency as cryptoCurrency,
+        status,
+        payment_url as paymentUrl,
+        network as network,
+        tx_hash as txHash,
+        wallet_address as walletAddress,
+        risk_score as riskScore,
+        aml_status as amlStatus,
+        merchant_id as merchantId
+      FROM invoices
+    `;
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    sql += ' ORDER BY created_at DESC';
+    sql += ' LIMIT ? OFFSET ?';
+
+    params.push(limit);
+    params.push(offset);
+
+    const rows = db.prepare(sql).all(...params);
+
+    return rows as Invoice[];
   }
 
   async attachTransaction(
@@ -451,7 +529,7 @@ export class InvoicesService {
         });
 
         ok = res.ok;
-      } catch (err) {
+      } catch {
         ok = false;
       }
 
