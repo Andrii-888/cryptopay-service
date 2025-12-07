@@ -2,9 +2,21 @@
 
 Backend Core of a Swiss-Grade Crypto Payment Processor
 
-psp-core is the backend engine responsible for generating crypto invoices, managing their lifecycle, storing blockchain transaction data, running AML checks, generating webhook events, and preparing the system for a fully compliant Swiss PSP.
+psp-core is the backend engine that:
 
-It is tightly integrated with the official CryptoPay frontend and is ready for partner demos.
+generates crypto invoices
+
+manages their full lifecycle
+
+stores blockchain transaction data
+
+performs AML checks (manual + automatic)
+
+generates webhook events
+
+forms the foundation for a fully compliant Swiss PSP
+
+It is integrated with the official CryptoPay frontend and ready for partner demos.
 
 ✅ MVP v1 — Current Status (Ready)
 🔹 1. Backend Architecture
@@ -17,55 +29,71 @@ Node.js 20
 
 Clean modular structure
 
-Ready for AML, Risk Engine, PostgreSQL, Merchant Logic
+Prepared for AML, Risk Engine, PostgreSQL, Merchant logic
 
 🔹 2. Complete Invoice Lifecycle
 Supported Statuses
 Status Description
-waiting Invoice created — awaiting payment
+waiting Awaiting payment
 confirmed Payment confirmed
-expired Invoice expired (15 minutes by default)
+expired Timer expired (15 minutes)
 rejected Rejected (AML / risk / manual review)
 API Endpoints
-Method Endpoint Description
-POST /invoices Create invoice
-GET /invoices/:id Get invoice
-POST /invoices/:id/confirm Mark confirmed
-POST /invoices/:id/expire Mark expired
-POST /invoices/:id/reject Reject
-POST /invoices/:id/tx Add blockchain transaction
-POST /invoices/:id/aml Set AML results
-POST /invoices/:id/aml/check Auto-AML based on amount
-GET /invoices/:id/webhooks Get webhook events
-POST /invoices/:id/webhooks/dispatch “Send” pending webhooks
+Invoices
 
-All endpoints are fully operational and tested.
+POST /invoices — create invoice
 
-🔹 3. Integrated With the CryptoPay Frontend (Next.js)
+GET /invoices/:id — fetch invoice
 
-The frontend:
+POST /invoices/:id/confirm — mark as confirmed
+
+POST /invoices/:id/expire — expire invoice
+
+POST /invoices/:id/reject — reject invoice
+
+Blockchain
+
+POST /invoices/:id/tx — attach blockchain transaction
+
+AML
+
+POST /invoices/:id/aml — set AML decision
+
+POST /invoices/:id/aml/check — auto AML based on amount
+
+Webhooks
+
+GET /invoices/:id/webhooks — list webhook events
+
+POST /invoices/:id/webhooks/dispatch — dispatch pending events
+
+🔹 3. Integration With CryptoPay Frontend
+
+Frontend:
 
 displays invoice details
 
-shows real-time countdown
+performs real-time status polling
 
-updates status dynamically
+shows waiting / confirmed / expired / rejected states
 
 renders the hosted payment page
 
-Example invoice page:
+Example:
 
 https://demo.your-cryptopay.com/open/pay/[invoiceId]
 
 🔹 4. Storage (Current MVP)
 
-Using SQLite with automatically generated schema:
+SQLite with automatically created schema:
 
-invoices table
+Tables:
 
-webhook_events table
+invoices
 
-fields:
+webhook_events
+
+Fields include:
 
 network, txHash, walletAddress
 
@@ -73,31 +101,33 @@ riskScore, amlStatus
 
 merchantId
 
-Fully prepared for migration to PostgreSQL.
+Ready for PostgreSQL migration.
 
 🧩 Tech Stack
 
-NestJS 11
+NestJS
 
 TypeScript
 
-Node.js 20+
+Node.js
 
-SQLite (temporary)
+SQLite (temporary storage)
 
-Ready for PostgreSQL + Prisma
+→ Next step: PostgreSQL + Prisma
 
 📁 Project Structure
 psp-core/
-src/
-invoices/
-aml/
-webhooks/
-db/sqlite.service.ts
-app.module.ts
-main.ts
+├── src/
+│ ├── invoices/
+│ ├── aml/
+│ ├── webhooks/
+│ ├── db/sqlite.service.ts
+│ ├── app.module.ts
+│ └── main.ts
+├── data/
+└── README.md
 
-🚀 Running Locally
+🚀 Local Development
 npm install
 npm run start:dev
 
@@ -105,56 +135,41 @@ Server:
 
 http://localhost:3000
 
-🔥 API Examples
-
-Create invoice:
-
+🔥 API Example Usage
+Create Invoice
 curl -X POST http://localhost:3000/invoices \
  -H "Content-Type: application/json" \
  -d '{"fiatAmount":77,"fiatCurrency":"EUR","cryptoCurrency":"USDT"}'
 
-Auto-AML:
-
+Auto-AML
 POST /invoices/:id/aml/check
 
-Dispatch webhooks:
-
+Dispatch Webhooks
 POST /invoices/:id/webhooks/dispatch
 
-🧠 How Storage Works
+🧠 Storage Behavior
 
-SQLite database file
+SQLite file created automatically
 
-Auto-migration of columns
+auto-migrations for columns
 
-Persistent across restarts
+persistent across restarts
 
-PostgreSQL is the next upgrade
+PostgreSQL migration planned
 
-🛣 Roadmap — Toward Production PSP
+🛣 Roadmap — Toward a Production-Ready PSP
 🔥 Phase 2 — PostgreSQL + Prisma
-
-Persistent storage, merchant support, filtering, analytics.
-
-🔥 Phase 3 — Webhooks
-
-Signed callbacks (HMAC), retries, dead-letter queue.
-
+🔥 Phase 3 — Webhook Engine Pro
 🔥 Phase 4 — AML / Risk Engine
-
-Risk scoring, address screening, AML integrations.
-
 🔥 Phase 5 — Merchant Dashboard
-
-Next.js panel with filters, AML logs, exports.
-
 🧾 Summary
 
-You now have a ready-to-demonstrate Swiss-grade PSP Core:
+You now have a Swiss-grade PSP Core MVP:
 
 ✔ Stable backend
-✔ Full invoice lifecycle
-✔ AML checks
-✔ Webhook engine
+✔ Complete invoice lifecycle
+✔ AML engine (manual + auto)
+✔ Webhooks with signatures
+✔ SQLite DB with extended schema
 ✔ Frontend integration
-✔ Scalable architecture
+✔ Production-oriented architecture

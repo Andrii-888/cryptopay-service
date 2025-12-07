@@ -7,6 +7,7 @@ import { AttachTransactionDto } from './dto/attach-transaction.dto';
 import { UpdateAmlDto } from './dto/update-aml.dto';
 import { SqliteService } from '../db/sqlite.service';
 import { WebhookEvent } from '../webhooks/interfaces/webhook-event.interface';
+import { WebhookSigner } from '../webhooks/webhook.signer';
 
 export type InvoiceStatus = 'waiting' | 'confirmed' | 'expired' | 'rejected';
 
@@ -33,6 +34,14 @@ const DEFAULT_EXPIRY_MINUTES = 15;
 
 const FRONTEND_BASE_URL =
   process.env.FRONTEND_BASE_URL ?? 'https://demo.your-cryptopay.com';
+
+// 🔹 куда шлём вебхуки (общий URL для демо / мерчанта)
+const WEBHOOK_TARGET_URL = process.env.WEBHOOK_TARGET_URL ?? '';
+
+// 🔹 секрет для HMAC-подписи вебхуков
+const WEBHOOK_SECRET =
+  process.env.WEBHOOK_SECRET ??
+  'psp_whsec_dev_demo_fallback_not_for_production';
 
 @Injectable()
 export class InvoicesService {
@@ -321,40 +330,82 @@ export class InvoicesService {
   }
 
   /**
-   * "Фейковая" отправка webhook-событий для одного инвойса.
-   * Сейчас НИЧЕГО никуда не шлём — только помечаем как sent
-   * и обновляем retry_count / last_attempt_at.
+   * Отправка pending-вебхуков для одного инвойса.
    *
-   * Это идеальный шаг перед реальной HTTP-интеграцией.
+   * Логика:
+   *  - если WEBHOOK_TARGET_URL не задан → просто помечаем как sent
+   *  - если задан:
+   *      * формируем body: { id, eventType, invoiceId, payload }
+   *      * подписываем через HMAC (WebhookSigner)
+   *      * отправляем POST
+   *      * 2xx → status = 'sent'
+   *      * ошибка → оставляем pending, увеличиваем retry_count
    */
   async dispatchPendingWebhooksForInvoice(invoiceId: string): Promise<{
     invoiceId: string;
     processed: number;
+    sent: number;
+    failed: number;
   }> {
     const db = this.sqlite.connection;
     const now = new Date().toISOString();
 
-    // Находим все pending события по инвойсу
     const pendingRows = db
       .prepare(
         `
-        SELECT id
+        SELECT
+          id,
+          event_type as eventType,
+          payload_json as payloadJson
         FROM webhook_events
         WHERE invoice_id = @invoiceId
           AND status = 'pending'
         ORDER BY created_at ASC;
       `,
       )
-      .all({ invoiceId }) as { id: string }[];
+      .all({ invoiceId }) as {
+      id: string;
+      eventType: string;
+      payloadJson: string;
+    }[];
 
     if (pendingRows.length === 0) {
       return {
         invoiceId,
         processed: 0,
+        sent: 0,
+        failed: 0,
       };
     }
 
-    const updateStmt = db.prepare(
+    // Если URL не задан — ведём себя как раньше: просто помечаем как sent
+    if (!WEBHOOK_TARGET_URL) {
+      const updateStmt = db.prepare(
+        `
+        UPDATE webhook_events
+        SET
+          status = 'sent',
+          retry_count = retry_count + 1,
+          last_attempt_at = @now
+        WHERE id = @id;
+      `,
+      );
+
+      for (const row of pendingRows) {
+        updateStmt.run({ id: row.id, now });
+      }
+
+      return {
+        invoiceId,
+        processed: pendingRows.length,
+        sent: pendingRows.length,
+        failed: 0,
+      };
+    }
+
+    const signer = new WebhookSigner(WEBHOOK_SECRET);
+
+    const successUpdateStmt = db.prepare(
       `
       UPDATE webhook_events
       SET
@@ -365,16 +416,59 @@ export class InvoicesService {
     `,
     );
 
+    const failUpdateStmt = db.prepare(
+      `
+      UPDATE webhook_events
+      SET
+        retry_count = retry_count + 1,
+        last_attempt_at = @now
+      WHERE id = @id;
+    `,
+    );
+
+    let sent = 0;
+    let failed = 0;
+
     for (const row of pendingRows) {
-      updateStmt.run({
-        id: row.id,
-        now,
-      });
+      let ok = false;
+
+      try {
+        const payload = JSON.parse(row.payloadJson);
+
+        const requestBody = {
+          id: row.id,
+          eventType: row.eventType,
+          invoiceId,
+          payload,
+        };
+
+        const headers = signer.generateHeaders(requestBody);
+
+        const res = await fetch(WEBHOOK_TARGET_URL, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestBody),
+        });
+
+        ok = res.ok;
+      } catch (err) {
+        ok = false;
+      }
+
+      if (ok) {
+        successUpdateStmt.run({ id: row.id, now });
+        sent++;
+      } else {
+        failUpdateStmt.run({ id: row.id, now });
+        failed++;
+      }
     }
 
     return {
       invoiceId,
       processed: pendingRows.length,
+      sent,
+      failed,
     };
   }
 
