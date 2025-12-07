@@ -1,11 +1,12 @@
 🚀 CryptoPay Service — PSP Core
+
 Backend Core of a Swiss-Grade Crypto Payment Processor
 
-psp-core is the backend engine that creates and manages crypto invoices, updates payment statuses, and prepares the system for AML checks, risk scoring, webhooks, and accounting.
+psp-core is the backend engine responsible for generating crypto invoices, managing their lifecycle, storing blockchain transaction data, running AML checks, generating webhook events, and preparing the system for a fully compliant Swiss PSP.
 
-It serves as the foundational layer of a future Swiss-compliant crypto PSP that integrates seamlessly with e-commerce platforms and merchant systems.
+It is tightly integrated with the official CryptoPay frontend and is ready for partner demos.
 
-✅ MVP v1 — Current State (Ready)
+✅ MVP v1 — Current Status (Ready)
 🔹 1. Backend Architecture
 
 NestJS 11
@@ -14,53 +15,65 @@ TypeScript
 
 Node.js 20
 
-Clean modular structure (InvoicesModule)
+Clean modular structure
 
-Fully prepared for scaling into AML, risk, and PostgreSQL
+Ready for AML, Risk Engine, PostgreSQL, Merchant Logic
 
 🔹 2. Complete Invoice Lifecycle
 Supported Statuses
 Status Description
 waiting Invoice created — awaiting payment
 confirmed Payment confirmed
-expired Invoice expired (default 15 min)
-rejected Rejected due to AML / risk / manual error
-Available API Endpoints
+expired Invoice expired (15 minutes by default)
+rejected Rejected (AML / risk / manual review)
+API Endpoints
 Method Endpoint Description
-POST /invoices Create a new invoice
-GET /invoices/:id Get invoice by ID
-POST /invoices/:id/confirm Mark as confirmed
-POST /invoices/:id/expire Mark as expired
-POST /invoices/:id/reject Reject due to AML / risk
+POST /invoices Create invoice
+GET /invoices/:id Get invoice
+POST /invoices/:id/confirm Mark confirmed
+POST /invoices/:id/expire Mark expired
+POST /invoices/:id/reject Reject
+POST /invoices/:id/tx Add blockchain transaction
+POST /invoices/:id/aml Set AML results
+POST /invoices/:id/aml/check Auto-AML based on amount
+GET /invoices/:id/webhooks Get webhook events
+POST /invoices/:id/webhooks/dispatch “Send” pending webhooks
 
-All endpoints are live, stable, and verified with the production frontend.
+All endpoints are fully operational and tested.
 
-🔹 3. Integrated With the Next.js Frontend
+🔹 3. Integrated With the CryptoPay Frontend (Next.js)
 
-The official CryptoPay frontend:
+The frontend:
 
-fetches invoices from psp-core
+displays invoice details
 
-displays amount, currency, countdown timer
+shows real-time countdown
 
-shows all UI states (waiting / confirmed / expired / rejected)
+updates status dynamically
 
-works with real-time expiry countdown
+renders the hosted payment page
 
-renders a clean hosted payment page
+Example invoice page:
 
-Example payment page:
 https://demo.your-cryptopay.com/open/pay/[invoiceId]
 
-🔹 4. Storage (MVP)
+🔹 4. Storage (Current MVP)
 
-For development & testing:
+Using SQLite with automatically generated schema:
 
-uses an in-memory store
+invoices table
 
-resets on server restart
+webhook_events table
 
-schema is fully prepared for PostgreSQL + Prisma
+fields:
+
+network, txHash, walletAddress
+
+riskScore, amlStatus
+
+merchantId
+
+Fully prepared for migration to PostgreSQL.
 
 🧩 Tech Stack
 
@@ -70,138 +83,78 @@ TypeScript
 
 Node.js 20+
 
-Temporary store: in-memory array
-(→ will migrate to PostgreSQL in the next milestone)
+SQLite (temporary)
+
+Ready for PostgreSQL + Prisma
 
 📁 Project Structure
 psp-core/
 src/
 invoices/
-dto/
-create-invoice.dto.ts
-invoices.controller.ts
-invoices.service.ts
+aml/
+webhooks/
+db/sqlite.service.ts
 app.module.ts
 main.ts
-package.json
-README.md
 
 🚀 Running Locally
-cd psp-core
-npm install --legacy-peer-deps
+npm install
 npm run start:dev
 
-Server starts at:
+Server:
 
-➡ http://localhost:3000
+http://localhost:3000
 
-🔥 API Usage Examples
-Create Invoice
+🔥 API Examples
+
+Create invoice:
+
 curl -X POST http://localhost:3000/invoices \
  -H "Content-Type: application/json" \
- -d '{"fiatAmount": 77, "fiatCurrency": "EUR", "cryptoCurrency": "USDT"}'
+ -d '{"fiatAmount":77,"fiatCurrency":"EUR","cryptoCurrency":"USDT"}'
 
-Get Invoice
-GET /invoices/:id
+Auto-AML:
 
-Confirm Invoice
-POST /invoices/:id/confirm
+POST /invoices/:id/aml/check
 
-Expire Invoice
-POST /invoices/:id/expire
+Dispatch webhooks:
 
-Reject Invoice (AML / Risk)
-POST /invoices/:id/reject
+POST /invoices/:id/webhooks/dispatch
 
-🧠 How MVP Storage Works
+🧠 How Storage Works
 
-invoices are stored in memory (this.invoices)
+SQLite database file
 
-storage resets when the server restarts
+Auto-migration of columns
 
-recommended testing flow:
+Persistent across restarts
 
-Create an invoice
+PostgreSQL is the next upgrade
 
-Copy its id
+🛣 Roadmap — Toward Production PSP
+🔥 Phase 2 — PostgreSQL + Prisma
 
-Call confirm / expire / reject
+Persistent storage, merchant support, filtering, analytics.
 
-Check updated UI on the payment page
+🔥 Phase 3 — Webhooks
 
-PostgreSQL will replace this layer in the next phase.
+Signed callbacks (HMAC), retries, dead-letter queue.
 
-🛣 Roadmap — Production-Ready PSP
-🔥 Phase 2 — PostgreSQL + Prisma (2–3 days)
+🔥 Phase 4 — AML / Risk Engine
 
-persistent invoice storage
+Risk scoring, address screening, AML integrations.
 
-merchantId support
+🔥 Phase 5 — Merchant Dashboard
 
-riskScore, txHash, blockchain network
-
-date/status/merchant filtering
-
-🔥 Phase 3 — Merchant Integration + Webhooks (3–5 days)
-Webhooks:
-
-invoice confirmed
-
-invoice expired
-
-invoice rejected
-
-Features:
-
-HMAC-signed callbacks
-
-automatic retry logic
-
-configurable webhook URLs
-
-merchant dashboard settings
-
-🔥 Phase 4 — AML / Risk Engine (5–7 days)
-
-internal risk scoring (0–100)
-
-address/transaction analysis
-
-external AML API integration
-
-auto-reject on high risk
-
-regulator-grade audit logs
-
-🔥 Phase 5 — Partner Dashboard (7–10 days)
-
-Next.js admin panel:
-
-invoice list + filters
-
-AML insights
-
-manual approve/reject
-
-CSV/Excel export
-
-accounting history
+Next.js panel with filters, AML logs, exports.
 
 🧾 Summary
 
-You now have a fully working CryptoPay PSP Core MVP:
+You now have a ready-to-demonstrate Swiss-grade PSP Core:
 
-✔ Stable NestJS backend
-✔ Complete invoice lifecycle
-✔ Integrated with frontend
-✔ All statuses supported
-✔ Architecture ready for AML, DB, Webhooks
-✔ Perfect foundation for a Swiss-grade PSP
-
-🎯 Next Steps
-
-1️⃣ Add PostgreSQL
-2️⃣ Implement Webhooks
-3️⃣ Build AML / Risk Engine
-4️⃣ Create Partner Dashboard
-5️⃣ Release production-ready CryptoPay PSP
+✔ Stable backend
+✔ Full invoice lifecycle
+✔ AML checks
+✔ Webhook engine
+✔ Frontend integration
+✔ Scalable architecture
