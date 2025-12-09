@@ -1,17 +1,21 @@
 // src/invoices/dto/update-aml.dto.ts
-
-export type AmlStatus = 'clean' | 'warning' | 'risky';
+import { IsIn, IsNumber, IsOptional } from 'class-validator';
+import type { AmlStatus, AssetStatus } from '../../aml/aml.service';
 
 export class UpdateAmlDto {
-  /**
-   * AML risk score (0–100).
-   * Можно не передавать, если хотим обновить только статус.
-   */
+  @IsOptional()
+  @IsNumber()
   riskScore?: number;
 
-  /**
-   * AML status: "clean" | "warning" | "risky".
-   * Можно не передавать, если хотим обновить только score.
-   */
+  @IsOptional()
+  @IsIn(['clean', 'warning', 'risky'])
   amlStatus?: AmlStatus;
+
+  @IsOptional()
+  @IsNumber()
+  assetRiskScore?: number;
+
+  @IsOptional()
+  @IsIn(['clean', 'suspicious', 'blocked'])
+  assetStatus?: AssetStatus;
 }

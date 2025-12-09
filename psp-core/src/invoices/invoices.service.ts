@@ -1,13 +1,13 @@
 // src/invoices/invoices.service.ts
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-
+import { SqliteService } from '../db/sqlite.service';
+import { AmlService } from '../aml/aml.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { AttachTransactionDto } from './dto/attach-transaction.dto';
 import { UpdateAmlDto } from './dto/update-aml.dto';
-import { SqliteService } from '../db/sqlite.service';
 import { WebhookEvent } from '../webhooks/interfaces/webhook-event.interface';
-import { WebhookSigner } from '../webhooks/webhook.signer';
+import { WebhookDispatchResult } from '../webhooks/interfaces/webhook-dispatch-result.interface';
 
 export type InvoiceStatus = 'waiting' | 'confirmed' | 'expired' | 'rejected';
 
@@ -25,330 +25,367 @@ export interface Invoice {
   network?: string | null;
   txHash?: string | null;
   walletAddress?: string | null;
+
   riskScore?: number | null;
   amlStatus?: string | null;
+
+  assetRiskScore?: number | null;
+  assetStatus?: string | null;
+
   merchantId?: string | null;
 }
 
-const DEFAULT_EXPIRY_MINUTES = 15;
-
-const FRONTEND_BASE_URL =
-  process.env.FRONTEND_BASE_URL ?? 'https://demo.your-cryptopay.com';
-
-// 🔹 Куда шлём вебхуки (общий URL для демо / мерчанта)
-const WEBHOOK_TARGET_URL = process.env.WEBHOOK_TARGET_URL ?? '';
-
-// 🔹 Секрет для HMAC-подписи вебхуков
-const WEBHOOK_SECRET =
-  process.env.WEBHOOK_SECRET ??
-  'psp_whsec_dev_demo_fallback_not_for_production';
+interface FindAllParams {
+  status?: InvoiceStatus;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
 
 @Injectable()
 export class InvoicesService {
-  constructor(private readonly sqlite: SqliteService) {}
+  private readonly logger = new Logger(InvoicesService.name);
 
-  async create(dto: CreateInvoiceDto): Promise<Invoice> {
-    const now = new Date();
-    const expires = new Date(
-      now.getTime() + DEFAULT_EXPIRY_MINUTES * 60 * 1000,
-    );
+  constructor(
+    private readonly sqlite: SqliteService,
+    private readonly amlService: AmlService,
+  ) {}
 
-    const id = this.generateInvoiceId();
-
-    const fiatAmount = Number(dto.fiatAmount ?? 0);
-    const fiatCurrency = dto.fiatCurrency || 'EUR';
-    const cryptoCurrency = dto.cryptoCurrency || 'USDT';
-
-    const cryptoAmount = fiatAmount;
-    const paymentUrl = `${FRONTEND_BASE_URL}/open/pay/${id}`;
-
-    const createdAt = now.toISOString();
-    const expiresAt = expires.toISOString();
-    const status: InvoiceStatus = 'waiting';
-
-    const db = this.sqlite.connection;
-
-    const stmt = db.prepare(
-      `
-      INSERT INTO invoices (
-        id,
-        created_at,
-        expires_at,
-        fiat_amount,
-        fiat_currency,
-        crypto_amount,
-        crypto_currency,
-        status,
-        payment_url
-      ) VALUES (
-        @id,
-        @createdAt,
-        @expiresAt,
-        @fiatAmount,
-        @fiatCurrency,
-        @cryptoAmount,
-        @cryptoCurrency,
-        @status,
-        @paymentUrl
-      );
-    `,
-    );
-
-    stmt.run({
-      id,
-      createdAt,
-      expiresAt,
-      fiatAmount,
-      fiatCurrency,
-      cryptoAmount,
-      cryptoCurrency,
-      status,
-      paymentUrl,
-    });
-
+  // 🧩 Маппинг строки SQLite → Invoice
+  // Здесь мы предполагаем, что row всегда есть (проверка выше)
+  private mapRow(row: any): Invoice {
     return {
-      id,
-      createdAt,
-      expiresAt,
-      fiatAmount,
-      fiatCurrency,
-      cryptoAmount,
-      cryptoCurrency,
-      status,
-      paymentUrl,
+      id: row.id,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      fiatAmount: row.fiatAmount,
+      fiatCurrency: row.fiatCurrency,
+      cryptoAmount: row.cryptoAmount,
+      cryptoCurrency: row.cryptoCurrency,
+      status: row.status as InvoiceStatus,
+      paymentUrl: row.paymentUrl,
+
+      network: row.network ?? null,
+      txHash: row.txHash ?? null,
+      walletAddress: row.walletAddress ?? null,
+
+      riskScore: row.riskScore ?? null,
+      amlStatus: row.amlStatus ?? null,
+
+      assetRiskScore: row.assetRiskScore ?? null,
+      assetStatus: row.assetStatus ?? null,
+
+      merchantId: row.merchantId ?? null,
     };
   }
 
-  async findOne(id: string): Promise<Invoice | null> {
+  // 🔹 SELECT-часть, чтобы не дублировать в findOne / findAll
+  private baseSelectSql = `
+    SELECT
+      id,
+      created_at       AS createdAt,
+      expires_at       AS expiresAt,
+      fiat_amount      AS fiatAmount,
+      fiat_currency    AS fiatCurrency,
+      crypto_amount    AS cryptoAmount,
+      crypto_currency  AS cryptoCurrency,
+      status,
+      payment_url      AS paymentUrl,
+      network,
+      tx_hash          AS txHash,
+      wallet_address   AS walletAddress,
+      risk_score       AS riskScore,
+      aml_status       AS amlStatus,
+      asset_risk_score AS assetRiskScore,
+      asset_status     AS assetStatus,
+      merchant_id      AS merchantId
+    FROM invoices
+  `;
+
+  // 🚀 CREATE
+  // 🚀 CREATE
+  async create(dto: CreateInvoiceDto): Promise<Invoice> {
     const db = this.sqlite.connection;
 
-    const row = db
-      .prepare(
-        `
-        SELECT
+    // Логируем, что реально прилетает в body
+    this.logger.log(`CreateInvoice DTO: ${JSON.stringify(dto)}`);
+
+    const now = new Date();
+    const id = `inv_${now.getTime()}_${randomUUID()}`;
+
+    const createdAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000).toISOString(); // 15 минут
+
+    // Аккуратно парсим сумму, чтобы НИКОГДА не было undefined / null
+    const rawFiatAmount: unknown = (dto as any).fiatAmount;
+    let fiatAmount = 0;
+
+    if (typeof rawFiatAmount === 'number') {
+      fiatAmount = rawFiatAmount;
+    } else if (typeof rawFiatAmount === 'string') {
+      const parsed = Number(rawFiatAmount.replace(',', '.'));
+      fiatAmount = Number.isFinite(parsed) ? parsed : 0;
+    } else {
+      fiatAmount = 0; // на всякий случай, чтобы не было NULL
+    }
+
+    const fiatCurrency = (dto.fiatCurrency || 'EUR').toUpperCase();
+    const cryptoCurrency = (dto.cryptoCurrency || 'USDT').toUpperCase();
+
+    // В MVP курс 1:1, потом сюда подставим реальный прайсинг
+    const cryptoAmount = fiatAmount;
+
+    const status: InvoiceStatus = 'waiting';
+    const paymentUrl = `https://demo.your-cryptopay.com/open/pay/${id}`;
+
+    const params = {
+      id,
+      createdAt,
+      expiresAt,
+      fiatAmount,
+      fiatCurrency,
+      cryptoAmount,
+      cryptoCurrency,
+      status,
+      paymentUrl,
+      network: null,
+      txHash: null,
+      walletAddress: null,
+      riskScore: null,
+      amlStatus: null,
+      assetRiskScore: null,
+      assetStatus: null,
+      merchantId: dto.merchantId ?? null,
+    };
+
+    this.logger.log(
+      `Inserting invoice: ${JSON.stringify({
+        id,
+        fiatAmount,
+        fiatCurrency,
+        cryptoAmount,
+        cryptoCurrency,
+        merchantId: params.merchantId,
+      })}`,
+    );
+
+    db.prepare(
+      `
+        INSERT INTO invoices (
           id,
-          created_at as createdAt,
-          expires_at as expiresAt,
-          fiat_amount as fiatAmount,
-          fiat_currency as fiatCurrency,
-          crypto_amount as cryptoAmount,
-          crypto_currency as cryptoCurrency,
+          created_at,
+          expires_at,
+          fiat_amount,
+          fiat_currency,
+          crypto_amount,
+          crypto_currency,
           status,
-          payment_url as paymentUrl,
-          network as network,
-          tx_hash as txHash,
-          wallet_address as walletAddress,
-          risk_score as riskScore,
-          aml_status as amlStatus,
-          merchant_id as merchantId
-        FROM invoices
-        WHERE id = ?;
+          payment_url,
+          network,
+          tx_hash,
+          wallet_address,
+          risk_score,
+          aml_status,
+          asset_risk_score,
+          asset_status,
+          merchant_id
+        ) VALUES (
+          @id,
+          @createdAt,
+          @expiresAt,
+          @fiatAmount,
+          @fiatCurrency,
+          @cryptoAmount,
+          @cryptoCurrency,
+          @status,
+          @paymentUrl,
+          @network,
+          @txHash,
+          @walletAddress,
+          @riskScore,
+          @amlStatus,
+          @assetRiskScore,
+          @assetStatus,
+          @merchantId
+        );
       `,
-      )
-      .get(id);
+    ).run(params);
+
+    this.logger.log(
+      `Created invoice ${id}: ${fiatAmount} ${fiatCurrency} → ${cryptoAmount} ${cryptoCurrency}`,
+    );
+
+    // findOne возвращает Invoice | null, поэтому кастим
+    return this.findOne(id) as Promise<Invoice>;
+  }
+
+  // 🔍 GET ONE
+  async findOne(id: string): Promise<Invoice | null> {
+    const db = this.sqlite.connection;
+    const row = db.prepare(`${this.baseSelectSql} WHERE id = ?`).get(id);
 
     if (!row) {
       return null;
     }
 
-    return row as Invoice;
+    return this.mapRow(row);
   }
 
+  // 📄 LIST / FILTERS
+  async findAll(params: FindAllParams = {}): Promise<Invoice[]> {
+    const db = this.sqlite.connection;
+
+    const where: string[] = [];
+    const bind: any[] = [];
+
+    if (params.status) {
+      where.push('status = ?');
+      bind.push(params.status);
+    }
+
+    if (params.from) {
+      where.push('created_at >= ?');
+      bind.push(params.from);
+    }
+
+    if (params.to) {
+      where.push('created_at <= ?');
+      bind.push(params.to);
+    }
+
+    let sql = this.baseSelectSql;
+    if (where.length > 0) {
+      sql += ` WHERE ${where.join(' AND ')}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    if (typeof params.limit === 'number') {
+      sql += ' LIMIT ?';
+      bind.push(params.limit);
+    }
+    if (typeof params.offset === 'number') {
+      sql += ' OFFSET ?';
+      bind.push(params.offset);
+    }
+
+    const rows = db.prepare(sql).all(...bind);
+    return rows.map((r: any) => this.mapRow(r));
+  }
+
+  // 🔗 ATTACH TRANSACTION
+  async attachTransaction(
+    id: string,
+    dto: AttachTransactionDto,
+  ): Promise<Invoice | null> {
+    const db = this.sqlite.connection;
+
+    db.prepare(
+      `
+      UPDATE invoices
+      SET
+        network = @network,
+        tx_hash = @txHash,
+        wallet_address = @walletAddress
+      WHERE id = @id
+    `,
+    ).run({
+      id,
+      network: dto.network ?? null,
+      txHash: dto.txHash ?? null,
+      walletAddress: dto.walletAddress ?? null,
+    });
+
+    return this.findOne(id);
+  }
+
+  // 🔄 UPDATE STATUS
   async updateStatus(
     id: string,
     status: InvoiceStatus,
   ): Promise<Invoice | null> {
     const db = this.sqlite.connection;
 
-    const updateStmt = db.prepare(
+    db.prepare(
       `
       UPDATE invoices
-      SET status = @status
-      WHERE id = @id;
+      SET status = ?
+      WHERE id = ?
     `,
-    );
-
-    const result = updateStmt.run({ id, status });
-
-    if (result.changes === 0) {
-      return null;
-    }
+    ).run(status, id);
 
     return this.findOne(id);
   }
 
-  /**
-   * Список инвойсов с фильтром по статусу/датам и пагинацией.
-   */
-  async findAll(options?: {
-    status?: InvoiceStatus;
-    from?: string; // created_at >= from (ISO)
-    to?: string; // created_at <= to (ISO)
-    limit?: number;
-    offset?: number;
-  }): Promise<Invoice[]> {
+  // ✍️ MANUAL AML
+  async updateAml(id: string, dto: UpdateAmlDto): Promise<Invoice | null> {
     const db = this.sqlite.connection;
 
-    let { status, from, to, limit = 100, offset = 0 } = options ?? {};
-
-    // Санитизируем числа, чтобы не уронить базу
-    if (!Number.isFinite(limit) || limit <= 0) {
-      limit = 100;
-    }
-    if (limit > 500) {
-      limit = 500;
-    }
-
-    if (!Number.isFinite(offset) || offset < 0) {
-      offset = 0;
-    }
-
-    const conditions: string[] = [];
-    const params: any[] = [];
-
-    if (status) {
-      conditions.push('status = ?');
-      params.push(status);
-    }
-
-    if (from) {
-      conditions.push('created_at >= ?');
-      params.push(from);
-    }
-
-    if (to) {
-      conditions.push('created_at <= ?');
-      params.push(to);
-    }
-
-    let sql = `
-      SELECT
-        id,
-        created_at as createdAt,
-        expires_at as expiresAt,
-        fiat_amount as fiatAmount,
-        fiat_currency as fiatCurrency,
-        crypto_amount as cryptoAmount,
-        crypto_currency as cryptoCurrency,
-        status,
-        payment_url as paymentUrl,
-        network as network,
-        tx_hash as txHash,
-        wallet_address as walletAddress,
-        risk_score as riskScore,
-        aml_status as amlStatus,
-        merchant_id as merchantId
-      FROM invoices
-    `;
-
-    if (conditions.length > 0) {
-      sql += ' WHERE ' + conditions.join(' AND ');
-    }
-
-    sql += ' ORDER BY created_at DESC';
-    sql += ' LIMIT ? OFFSET ?';
-
-    params.push(limit);
-    params.push(offset);
-
-    const rows = db.prepare(sql).all(...params);
-
-    return rows as Invoice[];
-  }
-
-  async attachTransaction(
-    id: string,
-    data: AttachTransactionDto,
-  ): Promise<Invoice | null> {
-    const db = this.sqlite.connection;
-
-    const updateStmt = db.prepare(
+    db.prepare(
       `
       UPDATE invoices
       SET
-        network = COALESCE(@network, network),
-        tx_hash = @txHash,
-        wallet_address = COALESCE(@walletAddress, wallet_address)
-      WHERE id = @id;
+        aml_status = @amlStatus,
+        risk_score = @riskScore
+      WHERE id = @id
     `,
-    );
-
-    const result = updateStmt.run({
+    ).run({
       id,
-      network: data.network ?? null,
-      txHash: data.txHash,
-      walletAddress: data.walletAddress ?? null,
+      amlStatus: dto.amlStatus ?? null,
+      riskScore: typeof dto.riskScore === 'number' ? dto.riskScore : null,
     });
-
-    if (result.changes === 0) {
-      return null;
-    }
 
     return this.findOne(id);
   }
 
-  async updateAml(id: string, data: UpdateAmlDto): Promise<Invoice | null> {
-    const db = this.sqlite.connection;
-
-    const updateStmt = db.prepare(
-      `
-      UPDATE invoices
-      SET
-        risk_score = COALESCE(@riskScore, risk_score),
-        aml_status = COALESCE(@amlStatus, aml_status)
-      WHERE id = @id;
-    `,
-    );
-
-    const result = updateStmt.run({
-      id,
-      riskScore: typeof data.riskScore === 'number' ? data.riskScore : null,
-      amlStatus: data.amlStatus ?? null,
-    });
-
-    if (result.changes === 0) {
-      return null;
-    }
-
-    return this.findOne(id);
-  }
-
+  // 🤖 AUTO AML (amount + stablecoin)
   async autoCheckAml(id: string): Promise<Invoice | null> {
     const invoice = await this.findOne(id);
     if (!invoice) {
       return null;
     }
 
-    const amount = Number(invoice.fiatAmount ?? 0);
-
-    let riskScore: number;
-    let amlStatus: string;
-
-    if (amount < 1000) {
-      riskScore = 10;
-      amlStatus = 'clean';
-    } else if (amount <= 5000) {
-      riskScore = 50;
-      amlStatus = 'warning';
-    } else {
-      riskScore = 85;
-      amlStatus = 'risky';
-    }
-
-    return this.updateAml(id, {
-      riskScore,
-      amlStatus: amlStatus as UpdateAmlDto['amlStatus'],
+    const amlResult = await this.amlService.checkInvoice({
+      fiatAmount: invoice.fiatAmount,
+      fiatCurrency: invoice.fiatCurrency,
+      cryptoCurrency: invoice.cryptoCurrency,
+      invoiceId: invoice.id,
+      network: invoice.network ?? undefined,
+      walletAddress: invoice.walletAddress ?? undefined,
+      txHash: invoice.txHash ?? undefined,
     });
+
+    const db = this.sqlite.connection;
+
+    db.prepare(
+      `
+      UPDATE invoices
+      SET
+        risk_score       = @riskScore,
+        aml_status       = @amlStatus,
+        asset_risk_score = @assetRiskScore,
+        asset_status     = @assetStatus
+      WHERE id = @id
+    `,
+    ).run({
+      id,
+      riskScore: amlResult.riskScore,
+      amlStatus: amlResult.status,
+      assetRiskScore: amlResult.assetRiskScore,
+      assetStatus: amlResult.assetStatus,
+    });
+
+    return this.findOne(id);
   }
 
+  // 📦 WEBHOOKS: CREATE EVENT
   async createWebhookEvent(
     invoiceId: string,
     eventType: string,
     payload: any,
-  ): Promise<string> {
+  ): Promise<void> {
     const db = this.sqlite.connection;
-
-    const id = `wh_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+    const id = randomUUID();
     const createdAt = new Date().toISOString();
 
     db.prepare(
@@ -360,6 +397,7 @@ export class InvoicesService {
         payload_json,
         status,
         retry_count,
+        last_attempt_at,
         created_at
       ) VALUES (
         @id,
@@ -368,8 +406,9 @@ export class InvoicesService {
         @payloadJson,
         'pending',
         0,
+        NULL,
         @createdAt
-      );
+      )
     `,
     ).run({
       id,
@@ -379,9 +418,12 @@ export class InvoicesService {
       createdAt,
     });
 
-    return id;
+    this.logger.log(
+      `Created webhook event ${id} for invoice=${invoiceId}, type=${eventType}`,
+    );
   }
 
+  // 📜 WEBHOOKS: LIST BY INVOICE
   async getWebhookEventsForInvoice(invoiceId: string): Promise<WebhookEvent[]> {
     const db = this.sqlite.connection;
 
@@ -390,16 +432,16 @@ export class InvoicesService {
         `
         SELECT
           id,
-          invoice_id as invoiceId,
-          event_type as eventType,
-          payload_json as payloadJson,
+          invoice_id   AS invoiceId,
+          event_type   AS eventType,
+          payload_json AS payloadJson,
           status,
-          retry_count as retryCount,
-          last_attempt_at as lastAttemptAt,
-          created_at as createdAt
+          retry_count  AS retryCount,
+          last_attempt_at AS lastAttemptAt,
+          created_at   AS createdAt
         FROM webhook_events
         WHERE invoice_id = ?
-        ORDER BY created_at DESC;
+        ORDER BY created_at DESC
       `,
       )
       .all(invoiceId);
@@ -407,154 +449,55 @@ export class InvoicesService {
     return rows as WebhookEvent[];
   }
 
-  /**
-   * Отправка pending-вебхуков для одного инвойса.
-   *
-   * Логика:
-   *  - если WEBHOOK_TARGET_URL не задан → просто помечаем как sent
-   *  - если задан:
-   *      * формируем body: { id, eventType, invoiceId, payload }
-   *      * подписываем через HMAC (WebhookSigner)
-   *      * отправляем POST
-   *      * 2xx → status = 'sent'
-   *      * ошибка → оставляем pending, увеличиваем retry_count
-   */
-  async dispatchPendingWebhooksForInvoice(invoiceId: string): Promise<{
-    invoiceId: string;
-    processed: number;
-    sent: number;
-    failed: number;
-  }> {
+  // 🚚 WEBHOOKS: DISPATCH PENDING (MVP — просто помечаем как "sent")
+  async dispatchPendingWebhooksForInvoice(
+    invoiceId: string,
+  ): Promise<WebhookDispatchResult> {
     const db = this.sqlite.connection;
-    const now = new Date().toISOString();
 
-    const pendingRows = db
+    const pending = db
       .prepare(
         `
-        SELECT
-          id,
-          event_type as eventType,
-          payload_json as payloadJson
+        SELECT id
         FROM webhook_events
-        WHERE invoice_id = @invoiceId
+        WHERE invoice_id = ?
           AND status = 'pending'
-        ORDER BY created_at ASC;
       `,
       )
-      .all({ invoiceId }) as {
-      id: string;
-      eventType: string;
-      payloadJson: string;
-    }[];
+      .all(invoiceId) as { id: string }[];
 
-    if (pendingRows.length === 0) {
-      return {
-        invoiceId,
-        processed: 0,
-        sent: 0,
-        failed: 0,
-      };
+    if (pending.length === 0) {
+      return { processed: 0, sent: 0, failed: 0 };
     }
 
-    // Если URL не задан — ведём себя как раньше: просто помечаем как sent
-    if (!WEBHOOK_TARGET_URL) {
-      const updateStmt = db.prepare(
-        `
-        UPDATE webhook_events
-        SET
-          status = 'sent',
-          retry_count = retry_count + 1,
-          last_attempt_at = @now
-        WHERE id = @id;
-      `,
-      );
+    const now = new Date().toISOString();
 
-      for (const row of pendingRows) {
-        updateStmt.run({ id: row.id, now });
-      }
-
-      return {
-        invoiceId,
-        processed: pendingRows.length,
-        sent: pendingRows.length,
-        failed: 0,
-      };
-    }
-
-    const signer = new WebhookSigner(WEBHOOK_SECRET);
-
-    const successUpdateStmt = db.prepare(
+    const updateStmt = db.prepare(
       `
       UPDATE webhook_events
       SET
         status = 'sent',
         retry_count = retry_count + 1,
         last_attempt_at = @now
-      WHERE id = @id;
-    `,
-    );
-
-    const failUpdateStmt = db.prepare(
-      `
-      UPDATE webhook_events
-      SET
-        retry_count = retry_count + 1,
-        last_attempt_at = @now
-      WHERE id = @id;
+      WHERE id = @id
     `,
     );
 
     let sent = 0;
-    let failed = 0;
 
-    for (const row of pendingRows) {
-      let ok = false;
-
-      try {
-        const payload = JSON.parse(row.payloadJson);
-
-        const requestBody = {
-          id: row.id,
-          eventType: row.eventType,
-          invoiceId,
-          payload,
-        };
-
-        const headers = signer.generateHeaders(requestBody);
-
-        const res = await fetch(WEBHOOK_TARGET_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(requestBody),
-        });
-
-        ok = res.ok;
-      } catch {
-        ok = false;
-      }
-
-      if (ok) {
-        successUpdateStmt.run({ id: row.id, now });
-        sent++;
-      } else {
-        failUpdateStmt.run({ id: row.id, now });
-        failed++;
-      }
+    for (const ev of pending) {
+      updateStmt.run({ id: ev.id, now });
+      sent++;
     }
+
+    this.logger.log(
+      `Dispatched ${sent} webhook events for invoice=${invoiceId} (MVP: marked as sent).`,
+    );
 
     return {
-      invoiceId,
-      processed: pendingRows.length,
+      processed: pending.length,
       sent,
-      failed,
+      failed: 0,
     };
-  }
-
-  private generateInvoiceId(): string {
-    try {
-      return `inv_${Date.now()}_${randomUUID()}`;
-    } catch {
-      return `inv_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
-    }
   }
 }

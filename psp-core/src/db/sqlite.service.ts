@@ -21,7 +21,7 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
     this.db.pragma('foreign_keys = ON');
 
     //
-    // 1) Основная таблица invoices (минимальная схема)
+    // 1) Основная таблица invoices (минимальная базовая схема)
     //
     this.db
       .prepare(
@@ -42,7 +42,11 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
       .run();
 
     //
-    // 2) Новые поля (network, tx_hash, wallet_address, AML, merchant)
+    // 2) Дополнительные поля для invoices:
+    //    - network / tx_hash / wallet_address
+    //    - risk_score / aml_status
+    //    - asset_risk_score / asset_status (чистота стейблкоина)
+    //    - merchant_id
     //
     const alterStatements = [
       `ALTER TABLE invoices ADD COLUMN network TEXT`,
@@ -50,6 +54,8 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
       `ALTER TABLE invoices ADD COLUMN wallet_address TEXT`,
       `ALTER TABLE invoices ADD COLUMN risk_score INTEGER`,
       `ALTER TABLE invoices ADD COLUMN aml_status TEXT`,
+      `ALTER TABLE invoices ADD COLUMN asset_risk_score INTEGER`,
+      `ALTER TABLE invoices ADD COLUMN asset_status TEXT`,
       `ALTER TABLE invoices ADD COLUMN merchant_id TEXT`,
     ];
 
@@ -58,6 +64,7 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
         this.db.prepare(sql).run();
         this.logger.log(`Applied column change: ${sql}`);
       } catch (err) {
+        // Колонка уже существует — это нормально при повторных запусках
         this.logger.debug(`Skip column change (likely exists): ${sql}`);
       }
     }

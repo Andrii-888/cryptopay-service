@@ -17,6 +17,7 @@ import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { AttachTransactionDto } from './dto/attach-transaction.dto';
 import { UpdateAmlDto } from './dto/update-aml.dto';
 import { WebhookEvent } from '../webhooks/interfaces/webhook-event.interface';
+import { WebhookDispatchResult } from '../webhooks/interfaces/webhook-dispatch-result.interface';
 
 @Controller('invoices')
 export class InvoicesController {
@@ -31,13 +32,13 @@ export class InvoicesController {
   // 📌 GET ALL (list + фильтры + пагинация)
   @Get()
   async findAll(
-    @Query('status') status?: string,
+    @Query('status') status?: InvoiceStatus,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ): Promise<Invoice[]> {
-    // Валидируем статус, чтобы совпадал с InvoiceStatus
+    // Подстраховка: разрешаем только валидные статусы
     const validStatuses: InvoiceStatus[] = [
       'waiting',
       'confirmed',
@@ -45,11 +46,10 @@ export class InvoicesController {
       'rejected',
     ];
 
-    const safeStatus: InvoiceStatus | undefined = validStatuses.includes(
-      status as InvoiceStatus,
-    )
-      ? (status as InvoiceStatus)
-      : undefined;
+    const safeStatus: InvoiceStatus | undefined =
+      status && validStatuses.includes(status as InvoiceStatus)
+        ? (status as InvoiceStatus)
+        : undefined;
 
     return this.invoicesService.findAll({
       status: safeStatus,
@@ -85,7 +85,9 @@ export class InvoicesController {
 
   // 📌 WEBHOOKS DISPATCH
   @Post(':id/webhooks/dispatch')
-  async dispatchInvoiceWebhooks(@Param('id') id: string) {
+  async dispatchInvoiceWebhooks(
+    @Param('id') id: string,
+  ): Promise<WebhookDispatchResult> {
     const invoice = await this.invoicesService.findOne(id);
     if (!invoice) {
       throw new NotFoundException(`Invoice with id ${id} not found`);
