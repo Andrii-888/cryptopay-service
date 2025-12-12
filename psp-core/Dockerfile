@@ -18,6 +18,7 @@ FROM node:20-alpine AS runner
 WORKDIR /app
     
 ENV NODE_ENV=production
+RUN mkdir -p /app/data
     
    
 COPY package*.json ./
