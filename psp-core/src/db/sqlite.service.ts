@@ -6,6 +6,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import Database, { Database as BetterSqliteDatabase } from 'better-sqlite3';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 @Injectable()
 export class SqliteService implements OnModuleInit, OnModuleDestroy {
@@ -13,7 +15,25 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
   private db!: BetterSqliteDatabase;
 
   onModuleInit() {
-    const dbPath = process.env.SQLITE_DB_PATH ?? 'data/psp-core.db';
+    const rawPath = process.env.SQLITE_DB_PATH ?? 'data/psp-core.db';
+
+    // Если путь относительный — делаем его абсолютным от текущей рабочей директории (/app на Fly)
+    const dbPath = path.isAbsolute(rawPath)
+      ? rawPath
+      : path.join(process.cwd(), rawPath);
+
+    // ✅ Гарантируем, что директория существует (иначе better-sqlite3 падает на Fly)
+    const dir = path.dirname(dbPath);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      this.logger.error(
+        `Failed to create SQLite directory "${dir}": ${
+          e instanceof Error ? e.message : 'Unknown error'
+        }`,
+      );
+      throw e;
+    }
 
     this.logger.log(`Opening SQLite database at: ${dbPath}`);
 
@@ -43,10 +63,6 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
 
     //
     // 2) Дополнительные поля для invoices:
-    //    - network / tx_hash / wallet_address
-    //    - risk_score / aml_status
-    //    - asset_risk_score / asset_status (чистота стейблкоина)
-    //    - merchant_id
     //
     const alterStatements = [
       `ALTER TABLE invoices ADD COLUMN network TEXT`,
@@ -63,14 +79,13 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
       try {
         this.db.prepare(sql).run();
         this.logger.log(`Applied column change: ${sql}`);
-      } catch (err) {
-        // Колонка уже существует — это нормально при повторных запусках
+      } catch {
         this.logger.debug(`Skip column change (likely exists): ${sql}`);
       }
     }
 
     //
-    // 3) Таблица webhook_events — для хранения событий, которые будем отправлять мерчанту
+    // 3) Таблица webhook_events
     //
     this.db
       .prepare(
@@ -92,10 +107,6 @@ export class SqliteService implements OnModuleInit, OnModuleDestroy {
       .run();
 
     this.logger.log('SQLite table "webhook_events" is ready');
-
-    //
-    // 4) Финальный лог
-    //
     this.logger.log('SQLite database initialized (tables are ready)');
   }
 
