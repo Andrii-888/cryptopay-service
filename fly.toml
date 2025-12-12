@@ -1,0 +1,30 @@
+app = "cryptopay-service"
+primary_region = "fra"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  # Собираем Node/NestJS из подпапки psp-core
+  builder = "heroku/buildpacks"
+  buildpacks = ["heroku/nodejs"]
+  path = "psp-core"
+
+[env]
+  PORT = "3000"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 3000
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "30s"
