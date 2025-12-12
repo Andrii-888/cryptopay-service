@@ -137,7 +137,13 @@ export class InvoicesService {
     const cryptoAmount = fiatAmount;
 
     const status: InvoiceStatus = 'waiting';
-    const paymentUrl = `https://demo.your-cryptopay.com/open/pay/${id}`;
+    const frontendUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.NEXT_PUBLIC_FRONTEND_URL ||
+      'http://localhost:3001'
+    ).replace(/\/+$/, '');
+
+    const paymentUrl = `${frontendUrl}/open/pay/${id}`;
 
     const params = {
       id,

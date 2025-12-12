@@ -1,6 +1,7 @@
+// src/main.ts
+import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -8,9 +9,9 @@ async function bootstrap() {
   // 🔐 Глобальная валидация DTO (нужно для class-validator)
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // удаляет лишние поля
-      transform: true, // конвертирует строки → числа и т.д.
-      forbidNonWhitelisted: false, // не кидает ошибку на лишние поля
+      whitelist: true, // удаляет лишние поля из тела запроса
+      transform: true, // превращает строки в числа и т.д. по типам DTO
+      forbidNonWhitelisted: false, // не падаем с 400, если прилетели лишние поля
     }),
   );
 

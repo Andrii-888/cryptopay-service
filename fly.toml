@@ -4,10 +4,8 @@ kill_signal = "SIGINT"
 kill_timeout = 5
 
 [build]
-  # Собираем Node/NestJS из подпапки psp-core
-  builder = "heroku/buildpacks"
-  buildpacks = ["heroku/nodejs"]
-  path = "psp-core"
+  # Говорим Fly: используй Dockerfile из подпапки psp-core
+  dockerfile = "psp-core/Dockerfile"
 
 [env]
   PORT = "3000"
